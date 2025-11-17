@@ -58,6 +58,11 @@ const AddItemScreen: React.FC<{ itemToEdit: Item | null, onBack: () => void }> =
     const [priceSuggestion, setPriceSuggestion] = useState('');
     const [isSuggestingPrice, setIsSuggestingPrice] = useState(false);
     const [autoPriceOptimization, setAutoPriceOptimization] = useState(false);
+    const [showKyc, setShowKyc] = useState(false);
+    const [aadharImageUrl, setAadharImageUrl] = useState('');
+    const [personalPhotoUrl, setPersonalPhotoUrl] = useState('');
+    const [supplierPhone, setSupplierPhone] = useState('');
+    const [supplierEmail, setSupplierEmail] = useState('');
 
     const isWorker = useMemo(() => category === ItemCategory.Workers, [category]);
     const isHeavyMachinery = useMemo(() => HEAVY_MACHINERY_CATEGORIES.includes(category), [category]);
@@ -109,6 +114,30 @@ const AddItemScreen: React.FC<{ itemToEdit: Item | null, onBack: () => void }> =
             setShowKyc(false);
         }
     }, [itemToEdit]);
+    
+    const handleKycFileSelect = (type: 'aadhar' | 'personal') => (e: React.ChangeEvent<HTMLInputElement>) => {
+        const file = e.target.files?.[0];
+        if (!file) return;
+        const reader = new FileReader();
+        reader.onload = () => {
+            const url = reader.result as string;
+            if (type === 'aadhar') setAadharImageUrl(url);
+            else setPersonalPhotoUrl(url);
+        };
+        reader.readAsDataURL(file);
+    };
+
+    const handleKycSave = async () => {
+        if (!user) return;
+        await updateUser({
+            ...user,
+            aadharImageUrl,
+            personalPhotoUrl,
+            phone: supplierPhone || user.phone,
+            email: supplierEmail || user.email,
+        });
+        setShowKyc(false);
+    };
     
     const handleSuggestPrice = async (purposeName: WorkPurpose) => {
         if (!ai) {

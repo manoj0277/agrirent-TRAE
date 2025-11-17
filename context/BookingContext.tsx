@@ -50,7 +50,7 @@ export const BookingProvider: React.FC<{ children: ReactNode }> = ({ children })
     const { showToast } = useToast();
     const { addNotification } = useNotification();
     const { items, updateItem } = useItem();
-    const recentPaymentTimestamps: number[] = [];
+    
     const supplierRejectCounts: Record<number, { count: number; firstTs: number }> = {};
 
     useEffect(() => {
