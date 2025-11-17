@@ -1,6 +1,8 @@
 
 
 import React, { useState, useEffect, useCallback, useMemo } from 'react';
+import { MapContainer, TileLayer, Marker } from 'react-leaflet';
+import L from 'leaflet';
 import { useAuth } from '../context/AuthContext';
 import { useItem } from '../context/ItemContext';
 import { Item, ItemCategory, Booking, AppView, WorkPurpose, WORK_PURPOSES } from '../types';
@@ -21,6 +23,7 @@ import { GoogleGenAI } from "@google/genai";
 import { useLanguage } from '../context/LanguageContext';
 import { TranslationKey } from '../translations';
 import { FALLBACK_IMAGE, onImgErrorSetFallback } from '../utils/imageFallback';
+import { supabase } from '../../lib/supabase';
 
 const apiKey = typeof process !== 'undefined' && process.env && process.env.API_KEY
   ? process.env.API_KEY
@@ -36,7 +39,7 @@ const HEAVY_MACHINERY_CATEGORIES = [ItemCategory.Tractors, ItemCategory.Harveste
 const EQUIPMENT_CATEGORIES = [ItemCategory.Drones, ItemCategory.Sprayers];
 
 const AddItemScreen: React.FC<{ itemToEdit: Item | null, onBack: () => void }> = ({ itemToEdit, onBack }) => {
-    const { user } = useAuth();
+    const { user, updateUser } = useAuth();
     const { addItem, updateItem } = useItem();
     const { showToast } = useToast();
     const { bookings } = useBooking();
@@ -252,7 +255,7 @@ const AddItemScreen: React.FC<{ itemToEdit: Item | null, onBack: () => void }> =
             <form className="p-4 space-y-4" onSubmit={handleSave}>
                  {category !== ItemCategory.Workers && (
                     <div>
-                        <label className="block text-neutral-700 dark:text-neutral-300 text-sm font-bold mb-2">{t('itemImage')}</label>
+                        <label className="block text-neutral-700 dark:text-neutral-300 text-sm font-bold mb-2">{t('itemImage')} <span className="text-red-600">*</span></label>
                         <div className="mt-1 flex justify-center px-6 pt-5 pb-6 border-2 border-gray-300 dark:border-gray-600 border-dashed rounded-md">
                             <div className="space-y-1 text-center">
                                 {imagePreviews.length > 0 ? (
@@ -277,7 +280,7 @@ const AddItemScreen: React.FC<{ itemToEdit: Item | null, onBack: () => void }> =
                         </div>
                     </div>
                  )}
-                <Input label={t('itemName')} value={name} onChange={e => setName(e.target.value)} required/>
+                <Input label="Model Name" value={name} onChange={e => setName(e.target.value)} required/>
                 <Input label={t('location')} value={location} onChange={e => setLocation(e.target.value)} required />
                  <div>
                     <label className="block text-neutral-700 dark:text-neutral-300 text-sm font-bold mb-2">{t('category')}</label>
@@ -423,7 +426,7 @@ const SupplierListingsScreen: React.FC<{ onAddItem: () => void, onEditItem: (m: 
                         [...myItems].reverse().map(item => {
                             const minPrice = Math.min(...item.purposes.map(p => p.price));
                              return (
-                             <div key={item.id} className="bg-white dark:bg-neutral-700 p-4 rounded-lg border border-neutral-200 dark:border-neutral-600">
+                            <div key={item.id} className="bg-white dark:bg-neutral-700 p-4 rounded-lg border border-neutral-200 dark:border-neutral-600">
                                 <div className="flex items-center justify-between">
                                     <div>
                                         <h3 className="font-bold text-neutral-800 dark:text-neutral-100">{item.name}</h3>
@@ -433,6 +436,11 @@ const SupplierListingsScreen: React.FC<{ onAddItem: () => void, onEditItem: (m: 
                                         {item.status.charAt(0).toUpperCase() + item.status.slice(1)}
                                     </span>
                                 </div>
+                                {item.status === 'pending' && (
+                                    <p className="mt-3 text-xs text-yellow-700 bg-yellow-100 rounded-md p-2">
+                                        Your item is pending; admin is verifying your details.
+                                    </p>
+                                )}
                                  <div className="text-right mt-4 border-t border-neutral-100 dark:border-neutral-600 pt-3 flex justify-end space-x-2">
                                     <button onClick={() => onEditItem(item)} className="bg-primary text-white font-bold py-1 px-3 rounded-lg text-sm hover:bg-primary-dark transition-colors">{t('edit')}</button>
                                     <button onClick={() => setItemToDelete(item)} className="bg-red-600 text-white font-bold py-1 px-3 rounded-lg text-sm hover:bg-red-700 transition-colors">{t('delete')}</button>
@@ -459,6 +467,126 @@ const SupplierListingsScreen: React.FC<{ onAddItem: () => void, onEditItem: (m: 
     )
 }
 
+const SupplierKycForm: React.FC<{ onSubmitted: () => void }> = ({ onSubmitted }) => {
+    const { user, updateUser } = useAuth();
+    const { t } = useLanguage();
+    const [fullName, setFullName] = useState('');
+    const [phone, setPhone] = useState('');
+    const [location, setLocation] = useState('');
+    const [coords, setCoords] = useState<{ lat: number; lng: number } | null>(null);
+    const [currentLoc, setCurrentLoc] = useState<{ lat: number; lng: number } | null>(null);
+    const [email, setEmail] = useState('');
+    const [idNumber, setIdNumber] = useState('');
+    const [isSubmitting, setIsSubmitting] = useState(false);
+
+    useEffect(() => {
+        if (user) {
+            setFullName(user.name || '');
+            setPhone(user.phone || '');
+            setLocation(user.location || '');
+            setEmail(user.email || '');
+            if (user.locationCoords) setCoords(user.locationCoords);
+        }
+    }, [user]);
+
+    useEffect(() => {
+        if (!('geolocation' in navigator)) return;
+        navigator.geolocation.getCurrentPosition(pos => {
+            const { latitude, longitude } = pos.coords;
+            setCurrentLoc({ lat: latitude, lng: longitude });
+        });
+    }, []);
+
+    const handleSubmit = async (e: React.FormEvent) => {
+        e.preventDefault();
+        if (!user) return;
+        setIsSubmitting(true);
+        try {
+            const updatedUser = {
+                ...user,
+                email,
+                location,
+                locationCoords: coords || user.locationCoords,
+            };
+            await updateUser(updatedUser);
+            await supabase.from('kycSubmissions').upsert([{ userId: user.id, status: 'Submitted', timestamp: new Date().toISOString() }], { onConflict: 'userId' });
+            onSubmitted();
+        } finally {
+            setIsSubmitting(false);
+        }
+    };
+
+    return (
+        <div className="p-4">
+            <h2 className="text-xl font-bold text-neutral-800 dark:text-neutral-100 mb-4">Supplier KYC</h2>
+            <form className="space-y-4" onSubmit={handleSubmit}>
+                <Input label="Full Name" value={fullName} onChange={e => setFullName(e.target.value)} required />
+                <Input label="Email" type="email" value={email} onChange={e => setEmail(e.target.value)} required />
+                <Input label="Phone" value={phone} onChange={e => setPhone(e.target.value)} required />
+                <Input label="Location" value={location} onChange={e => setLocation(e.target.value)} required />
+                <div className="w-full h-64 rounded-md overflow-hidden">
+                    <MapContainer
+                        center={coords ? [coords.lat, coords.lng] : [17.385, 78.4867]}
+                        zoom={12}
+                        scrollWheelZoom={false}
+                        style={{ height: '100%', width: '100%', touchAction: 'none' }}
+                        whenCreated={(map) => {
+                            map.dragging.disable();
+                            const handleTouch = (e: any) => {
+                                const touches = (e.originalEvent?.touches ?? e.touches) || [];
+                                if (touches.length >= 2) {
+                                    map.dragging.enable();
+                                } else {
+                                    map.dragging.disable();
+                                }
+                            };
+                            map.on('touchstart', handleTouch);
+                            map.on('touchmove', handleTouch);
+                            map.on('touchend', () => map.dragging.disable());
+
+                            map.on('click', (e: any) => {
+                                const { lat, lng } = e.latlng;
+                                setCoords({ lat, lng });
+                                setLocation(`${lat.toFixed(5)}, ${lng.toFixed(5)}`);
+                            });
+                        }}
+                    >
+                        <TileLayer
+                            attribution='&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors'
+                            url="https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png"
+                        />
+                        {currentLoc && (
+                            <Marker
+                                position={[currentLoc.lat, currentLoc.lng]}
+                                icon={new L.DivIcon({
+                                    html: '<div class="w-4 h-4 rounded-full bg-green-600 ring-2 ring-white"></div>',
+                                    className: '',
+                                    iconSize: [16, 16],
+                                    iconAnchor: [8, 8],
+                                })}
+                            />
+                        )}
+                        {coords && (
+                            <Marker
+                                position={[coords.lat, coords.lng]}
+                                icon={new L.DivIcon({
+                                    html: '<div class="w-6 h-6 rounded-full bg-red-600 ring-2 ring-white"></div>',
+                                    className: '',
+                                    iconSize: [24, 24],
+                                    iconAnchor: [12, 12],
+                                })}
+                            />
+                        )}
+                    </MapContainer>
+                    <p className="text-xs text-neutral-600 mt-1">Tap to select location. Use two fingers to pan.</p>
+                </div>
+                <Input label="Government ID Number" value={idNumber} onChange={e => setIdNumber(e.target.value)} required />
+                <Button type="submit" disabled={isSubmitting}>{isSubmitting ? t('processing') : 'Submit KYC'}</Button>
+            </form>
+        </div>
+    );
+};
+
 const StatCard: React.FC<{ title: string; value: string | number; icon: React.ReactElement }> = ({ title, value, icon }) => (
     <div className="bg-white dark:bg-neutral-700 p-4 rounded-lg border border-neutral-200 dark:border-neutral-600 flex items-center space-x-3">
         <div className="flex-shrink-0 bg-primary/10 p-3 rounded-full">{icon}</div>
@@ -470,7 +598,7 @@ const StatCard: React.FC<{ title: string; value: string | number; icon: React.Re
 );
 
 
-const SupplierDashboardScreen: React.FC<SupplierViewProps & { goToTab?: (name: string) => void }> = ({ navigate, goToTab }) => {
+const SupplierDashboardScreen: React.FC<SupplierViewProps & { goToTab?: (name: string) => void, openKycForm?: () => void, kycStatus?: string | null }> = ({ navigate, goToTab, openKycForm, kycStatus }) => {
     const { user, logout } = useAuth();
     const { bookings } = useBooking();
     const { items } = useItem();
@@ -531,6 +659,15 @@ const SupplierDashboardScreen: React.FC<SupplierViewProps & { goToTab?: (name: s
                     <h2 className="text-xl font-bold text-neutral-800 dark:text-neutral-100">{t('welcome')}, {user?.name}!</h2>
                     <p className="text-neutral-700 dark:text-neutral-300 text-sm">{user?.email}</p>
                     {user?.status === 'pending' && <p className="text-yellow-700 mt-2 text-xs p-2 bg-yellow-100 rounded-md">Your account is pending admin approval.</p>}
+                    {kycStatus === 'Submitted' && (
+                        <p className="text-yellow-700 mt-2 text-xs p-2 bg-yellow-100 rounded-md">KYC submitted. Verification pending.</p>
+                    )}
+                    {!kycStatus && (
+                        <div className="mt-2 flex items-center gap-2">
+                            <p className="text-xs text-neutral-700 dark:text-neutral-300">Complete KYC to speed up approval.</p>
+                            <button onClick={openKycForm} className="text-xs px-2 py-1 bg-primary text-white rounded-md">Start KYC</button>
+                        </div>
+                    )}
                 </div>
             </div>
 
@@ -596,6 +733,22 @@ const SupplierView: React.FC<SupplierViewProps> = ({ navigate }) => {
     const { bookings } = useBooking();
     const { t } = useLanguage();
     const unreadChatCount = user ? getUnreadMessageCount(user.id) : 0;
+    const [kycStatus, setKycStatus] = useState<string | null>(null);
+    const [showKycForm, setShowKycForm] = useState(false);
+
+    useEffect(() => {
+        const loadKyc = async () => {
+            if (!user) return;
+            try {
+                const { data } = await supabase.from('kycSubmissions').select('status').eq('userId', user.id).limit(1);
+                const status = (data && data[0] && (data[0] as any).status) || null;
+                setKycStatus(status);
+            } catch {
+                setKycStatus(null);
+            }
+        };
+        loadKyc();
+    }, [user, activeTab]);
 
     const hasActiveBookings = useMemo(() => {
         if (!user) return false;
@@ -619,17 +772,22 @@ const SupplierView: React.FC<SupplierViewProps> = ({ navigate }) => {
     
     const renderContent = () => {
         switch(activeTab) {
-            case 'dashboard': return <SupplierDashboardScreen navigate={navigate} goToTab={setActiveTab} />;
+            case 'dashboard': return <SupplierDashboardScreen navigate={navigate} goToTab={setActiveTab} openKycForm={() => setShowKycForm(true)} kycStatus={kycStatus} />;
             case 'requests': return <SupplierRequestsScreen />;
             case 'bookings': return <SupplierBookingsScreen navigate={navigate} />;
             case 'schedule': return <SupplierScheduleScreen />;
-            case 'listings': return <SupplierListingsScreen onAddItem={handleAddItem} onEditItem={handleEditItem} />;
+            case 'listings':
+                return <SupplierListingsScreen onAddItem={handleAddItem} onEditItem={handleEditItem} />;
             default: return <SupplierDashboardScreen navigate={navigate}/>;
         }
     }
 
     if (view === 'ADD_ITEM') {
         return <AddItemScreen itemToEdit={itemToEdit} onBack={handleBackToDashboard} />;
+    }
+
+    if (showKycForm) {
+        return <SupplierKycForm onSubmitted={() => { setShowKycForm(false); setKycStatus('Submitted'); }} />;
     }
 
     return (

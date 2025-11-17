@@ -10,11 +10,12 @@ interface FarmerMapScreenProps {
     userLocation?: { lat: number; lng: number; };
 }
 
-const userIcon = new L.Icon({
-    iconUrl: 'data:image/svg+xml;base64,' + btoa('<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="#3b82f6" class="w-6 h-6"><path fill-rule="evenodd" d="M12 2.25c-5.385 0-9.75 4.365-9.75 9.75s4.365 9.75 9.75 9.75 9.75-4.365 9.75-9.75S17.385 2.25 12 2.25z" clip-rule="evenodd" /></svg>'),
-    iconSize: [24, 24],
-    iconAnchor: [12, 12],
-    className: 'ring-2 ring-white rounded-full'
+const userIcon = new L.DivIcon({
+    html: '<div class="w-4 h-4 rounded-full bg-green-600 ring-2 ring-white"></div>',
+    className: '',
+    iconSize: [16, 16],
+    iconAnchor: [8, 8],
+    popupAnchor: [0, -8],
 });
 
 const ICON_COLORS: Record<ItemCategory, string> = {

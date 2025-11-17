@@ -1,9 +1,10 @@
-import React, { useState, useMemo } from 'react';
+import React, { useState, useMemo, useEffect } from 'react';
 import { AppView, SupportTicket, UserRole } from '../types';
 import { useSupport } from '../context/SupportContext';
 import { useAuth } from '../context/AuthContext';
 import Header from '../components/Header';
 import Button from '../components/Button';
+import { useNotification } from '../context/NotificationContext';
 
 interface ManageSupportTicketsScreenProps {
     onBack: () => void;
@@ -18,6 +19,8 @@ const TicketCard: React.FC<{ ticket: SupportTicket, onResolve: (id: number) => v
         switch (status) {
             case 'open': return 'bg-yellow-100 text-yellow-800';
             case 'closed': return 'bg-green-100 text-green-800';
+            case 'escalated': return 'bg-red-100 text-red-800';
+            case 'pending': return 'bg-blue-100 text-blue-800';
             default: return 'bg-gray-100 text-gray-800';
         }
     };
@@ -41,12 +44,25 @@ const TicketCard: React.FC<{ ticket: SupportTicket, onResolve: (id: number) => v
                 <div>
                     <h3 className="font-bold text-neutral-800 dark:text-neutral-100">{ticket.name}</h3>
                     <p className="text-sm text-neutral-500 dark:text-neutral-400">{ticket.email} - {ticket.timestamp}</p>
+                    <div className="mt-1 text-xs text-neutral-600 dark:text-neutral-300 flex gap-2">
+                        {ticket.category && <span>Category: {ticket.category}</span>}
+                        {ticket.subcategory && <span>Sub: {ticket.subcategory}</span>}
+                        {ticket.priority && <span>Priority: {ticket.priority}</span>}
+                        {ticket.bookingId && <span>Booking: {ticket.bookingId}</span>}
+                    </div>
                 </div>
                 <span className={`text-xs font-semibold px-3 py-1 rounded-full ${getStatusClasses(ticket.status)}`}>
                     {ticket.status}
                 </span>
             </div>
             <p className="mt-2 text-neutral-700 dark:text-neutral-300 bg-neutral-50 dark:bg-neutral-700 p-3 rounded-md">{ticket.message}</p>
+            {ticket.evidenceUrls && ticket.evidenceUrls.length > 0 && (
+                <div className="mt-2 flex gap-2 flex-wrap">
+                    {ticket.evidenceUrls.map((u, i) => (
+                        <a key={i} href={u} target="_blank" rel="noreferrer" className="text-xs underline text-primary">Evidence {i+1}</a>
+                    ))}
+                </div>
+            )}
             
             {isChatOpen && (
                 <div className="mt-3 border-t dark:border-neutral-600 pt-3 space-y-3">
@@ -88,7 +104,10 @@ const TicketCard: React.FC<{ ticket: SupportTicket, onResolve: (id: number) => v
 const ManageSupportTicketsScreen: React.FC<ManageSupportTicketsScreenProps> = ({ onBack }) => {
     const { tickets, resolveTicket, addReplyToTicket } = useSupport();
     const { user, allUsers } = useAuth();
+    const { addNotification } = useNotification();
     const [filter, setFilter] = useState<'all' | SupportTicket['status']>('all');
+    const [search, setSearch] = useState('');
+    const [sortBy, setSortBy] = useState<'priority' | 'time'>('priority');
 
     const handleReply = (ticketId: number, text: string) => {
         if (user) {
@@ -100,11 +119,44 @@ const ManageSupportTicketsScreen: React.FC<ManageSupportTicketsScreenProps> = ({
         }
     };
 
+    useEffect(() => {
+        const highPriority = tickets.filter(t => t.priority === 'High' && t.status === 'open');
+        highPriority.forEach(t => {
+            const created = new Date(t.timestamp).getTime();
+            const now = Date.now();
+            if (now - created > 2 * 60 * 60 * 1000) {
+                addNotification({ userId: 0, message: `High priority ticket ${t.id} breached 2h SLA.`, type: 'admin' });
+            }
+        });
+        const bySupplier: Record<number, number> = {};
+        tickets.forEach(t => { if (t.againstUserId) bySupplier[t.againstUserId] = (bySupplier[t.againstUserId] || 0) + 1; });
+        Object.entries(bySupplier).forEach(([uid, c]) => { if (c >= 3) addNotification({ userId: 0, message: `Supplier ${uid} flagged with ${c} tickets.`, type: 'admin' }); });
+        const byFarmerFalse: Record<number, number> = {};
+        tickets.filter(t => t.status === 'closed' && (t.adminNotes || []).some(n => n.toLowerCase().includes('false')))
+            .forEach(t => { if (t.userId) byFarmerFalse[t.userId] = (byFarmerFalse[t.userId] || 0) + 1; });
+        Object.entries(byFarmerFalse).forEach(([uid, c]) => { if (c >= 2) addNotification({ userId: 0, message: `Farmer ${uid} flagged for repeated false reporting.`, type: 'admin' }); });
+    }, [tickets]);
+
     const filteredTickets = useMemo(() => {
-        const sorted = [...tickets].sort((a, b) => (a.status === 'open' ? -1 : 1) - (b.status === 'open' ? -1 : 1));
+        let arr = [...tickets];
+        if (sortBy === 'priority') {
+            const order = { High: 0, Med: 1, Low: 2 } as any;
+            arr.sort((a,b) => (order[a.priority || 'Low'] - order[b.priority || 'Low']))
+        } else {
+            arr.sort((a,b) => new Date(b.timestamp).getTime() - new Date(a.timestamp).getTime())
+        }
         if (filter === 'all') return sorted;
-        return sorted.filter(t => t.status === filter);
-    }, [tickets, filter]);
+        const subset = arr.filter(t => t.status === filter);
+        const q = search.trim().toLowerCase();
+        if (!q) return subset;
+        return subset.filter(t => (
+            (t.name || '').toLowerCase().includes(q) ||
+            (t.email || '').toLowerCase().includes(q) ||
+            (t.message || '').toLowerCase().includes(q) ||
+            (t.category || '').toLowerCase().includes(q) ||
+            (t.subcategory || '').toLowerCase().includes(q)
+        ));
+    }, [tickets, filter, search, sortBy]);
 
     return (
         <div className="bg-neutral-50 dark:bg-neutral-900 min-h-screen">
@@ -119,6 +171,11 @@ const ManageSupportTicketsScreen: React.FC<ManageSupportTicketsScreenProps> = ({
                             {status}
                         </button>
                     ))}
+                    <select value={sortBy} onChange={e => setSortBy(e.target.value as any)} className="px-3 py-2 text-sm rounded-full bg-neutral-200 dark:bg-neutral-600 text-neutral-700 dark:text-neutral-200">
+                        <option value="priority">Sort by Priority</option>
+                        <option value="time">Sort by Time</option>
+                    </select>
+                    <input value={search} onChange={e => setSearch(e.target.value)} placeholder="Search" className="flex-grow px-3 py-2 text-sm rounded-full bg-neutral-200 dark:bg-neutral-600 text-neutral-700 dark:text-neutral-200" />
                 </div>
                 <div className="space-y-3">
                     {filteredTickets.map(ticket => (

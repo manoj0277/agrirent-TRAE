@@ -167,7 +167,7 @@ export const AuthProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
         }
         const rec = rows[0] as Partial<User> & { role?: UserRole; status?: 'approved' | 'pending' | 'suspended' };
         if (rec.status === 'suspended') {
-            try { await supabase.auth.signOut(); } catch (e: any) { const msg = String(e?.message || '').toLowerCase(); if (!msg.includes('abort')) throw e; }
+            try { await supabase.auth.signOut({ scope: 'local' }); } catch {}
             return false;
         }
         const resolvedRole = rec.role === UserRole.Admin ? UserRole.Admin : role;
@@ -186,9 +186,9 @@ export const AuthProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
 
     
 
-    const logout = () => {
+        const logout = () => {
         if (!supabaseConfigured) { setUser(null); return; }
-        supabase.auth.signOut().catch((e: any) => { const msg = String(e?.message || '').toLowerCase(); if (!msg.includes('abort')) {} });
+        supabase.auth.signOut({ scope: 'local' }).catch(() => {});
         setUser(null);
     };
 
@@ -308,7 +308,7 @@ export const AuthProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
                 showToast('Supabase not configured. Please set VITE_SUPABASE_URL and VITE_SUPABASE_ANON_KEY.', 'error');
                 return;
             }
-            const { error } = await supabase.from('users').update({ ...updatedUser }).eq('id', updatedUser.id);
+            const { error } = await supabase.from('users').upsert([{ ...updatedUser }], { onConflict: 'id' });
             if (error) throw error;
             try { await supabase.auth.updateUser({ data: { full_name: updatedUser.name, phone: updatedUser.phone } }); } catch {}
             if (user && user.id === updatedUser.id) {

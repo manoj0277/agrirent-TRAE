@@ -217,9 +217,16 @@ export interface SupportTicket {
     name: string;
     email: string;
     message: string;
-    status: 'open' | 'closed';
+    status: 'open' | 'closed' | 'escalated' | 'pending';
     timestamp: string;
     replies?: SupportReply[];
+    category?: 'Machine' | 'Payment' | 'Booking' | 'Behaviour';
+    subcategory?: string;
+    againstUserId?: number;
+    bookingId?: string;
+    evidenceUrls?: string[];
+    priority?: 'Low' | 'Med' | 'High';
+    adminNotes?: string[];
 }
 
 export interface AiChatMessage {
@@ -257,3 +264,34 @@ export type AppView =
     | { view: 'POLICY' }
     | { view: 'COMMUNITY' }
     | { view: 'CROP_CALENDAR' };
+
+export type RiskLevel = 'LOW' | 'MEDIUM' | 'HIGH';
+
+export interface FraudFlag {
+    id: string;
+    type: 'Farmer' | 'Supplier' | 'Payment';
+    userId?: number;
+    bookingId?: string;
+    reason: string;
+    score: number;
+    risk: RiskLevel;
+    timestamp: string;
+}
+
+export interface KycDocument {
+    type: 'Aadhaar' | 'PAN' | 'Photo' | 'GST' | 'MachineProof' | 'BankPassbook';
+    url?: string;
+    status: 'Submitted' | 'Approved' | 'Rejected' | 'ReuploadRequested';
+    notes?: string;
+}
+
+export interface KycSubmission {
+    id: number;
+    userId: number;
+    docs: KycDocument[];
+    status: 'Pending' | 'Approved' | 'Rejected';
+    riskLevel?: RiskLevel;
+    submittedAt: string;
+    adminNotes?: string[];
+    geo?: { lat: number; lng: number };
+}

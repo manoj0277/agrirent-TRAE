@@ -19,6 +19,7 @@ export const translations = {
   users: { en: 'Users', hi: 'उपयोगकर्ता', te: 'వినియోగదారులు' },
   items: { en: 'Items', hi: 'आइटम', te: 'అంశాలు' },
   more: { en: 'More', hi: 'अधिक', te: 'మరిన్ని' },
+  allow: { en: 'Allow', hi: 'अनुमति दें', te: 'అనుమతించు' },
   support: { en: 'Support', hi: 'सहायता', te: 'మద్దతు' },
   analytics: { en: 'Analytics', hi: 'एनालिटिक्स', te: 'విశ్లేషణలు' },
   admin: { en: 'Admin', hi: 'एडमिन', te: 'అడ్మిన్' },

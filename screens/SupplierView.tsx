@@ -1,5 +1,7 @@
 
-import React, { useState, useEffect, useCallback, useMemo } from 'react';
+import React, { useState, useEffect, useCallback, useMemo, useRef } from 'react';
+import { MapContainer, TileLayer, Marker } from 'react-leaflet';
+import L from 'leaflet';
 import { useAuth } from '../context/AuthContext';
 import { useItem } from '../context/ItemContext';
 import { Item, ItemCategory, Booking, AppView, WorkPurpose, WORK_PURPOSES } from '../types';
@@ -8,6 +10,7 @@ import Button from '../components/Button';
 import Input from '../components/Input';
 import ConfirmationDialog from '../components/ConfirmationDialog';
 import NotificationBell from '../components/NotificationBell';
+import { ResponsiveContainer, LineChart, CartesianGrid, XAxis, YAxis, Tooltip, Line } from 'recharts';
 import BottomNav, { NavItemConfig } from '../components/BottomNav';
 import { SupplierRequestsScreen } from './SupplierRequestsScreen';
 import { useChat } from '../context/ChatContext';
@@ -16,6 +19,7 @@ import SupplierBookingsScreen from './SupplierBookingsScreen';
 import { useBooking } from '../context/BookingContext';
 import { useReview } from '../context/ReviewContext';
 import SupplierScheduleScreen from './SupplierScheduleScreen';
+import { supabase } from '../lib/supabase';
 import { GoogleGenAI } from "@google/genai";
 import { useLanguage } from '../context/LanguageContext';
 
@@ -44,6 +48,9 @@ const AddItemScreen: React.FC<{ itemToEdit: Item | null, onBack: () => void }> =
     const [purposes, setPurposes] = useState<{ name: WorkPurpose, price: string }[]>([{ name: WORK_PURPOSES[0], price: '' }]);
     const [category, setCategory] = useState<ItemCategory>(itemToEdit?.category || ItemCategory.Tractors);
     const [location, setLocation] = useState('');
+    const [itemGeo, setItemGeo] = useState<{ lat: number; lng: number } | null>(null);
+    const [itemMapCenter, setItemMapCenter] = useState<[number, number]>([17.3850, 78.4867]);
+    const itemMapRef = useRef<any>(null);
     const [description, setDescription] = useState('');
     const [operatorCharge, setOperatorCharge] = useState('');
     const [imagePreview, setImagePreview] = useState<string | null>(null);
@@ -63,6 +70,7 @@ const AddItemScreen: React.FC<{ itemToEdit: Item | null, onBack: () => void }> =
     const [personalPhotoUrl, setPersonalPhotoUrl] = useState('');
     const [supplierPhone, setSupplierPhone] = useState('');
     const [supplierEmail, setSupplierEmail] = useState('');
+    const [currentLocation, setCurrentLocation] = useState<{ lat: number; lng: number } | null>(null);
 
     const isWorker = useMemo(() => category === ItemCategory.Workers, [category]);
     const isHeavyMachinery = useMemo(() => HEAVY_MACHINERY_CATEGORIES.includes(category), [category]);
@@ -91,6 +99,10 @@ const AddItemScreen: React.FC<{ itemToEdit: Item | null, onBack: () => void }> =
             setPurposes(itemToEdit.purposes.map(p => ({ name: p.name, price: p.price.toString() })));
             setCategory(itemToEdit.category);
             setLocation(itemToEdit.location);
+            if (itemToEdit.locationCoords) {
+                setItemGeo(itemToEdit.locationCoords);
+                setItemMapCenter([itemToEdit.locationCoords.lat, itemToEdit.locationCoords.lng]);
+            }
             setDescription(itemToEdit.description);
             setOperatorCharge(itemToEdit.operatorCharge?.toString() || '');
             if (itemToEdit.images && itemToEdit.images.length > 0) setImagePreview(itemToEdit.images[0]);
@@ -104,16 +116,16 @@ const AddItemScreen: React.FC<{ itemToEdit: Item | null, onBack: () => void }> =
         } else {
             resetForm();
         }
-        if (user && user.role === 'Supplier' && (!user.aadharImageUrl || !user.personalPhotoUrl || !user.phone)) {
-            setShowKyc(true);
-            setAadharImageUrl(user.aadharImageUrl || '');
-            setPersonalPhotoUrl(user.personalPhotoUrl || '');
-            setSupplierPhone(user.phone || '');
-            setSupplierEmail(user.email || '');
-        } else {
-            setShowKyc(false);
-        }
+        setShowKyc(false);
     }, [itemToEdit]);
+
+    useEffect(() => {
+        if (!('geolocation' in navigator)) return;
+        navigator.geolocation.getCurrentPosition(pos => {
+            const { latitude, longitude } = pos.coords;
+            setCurrentLocation({ lat: latitude, lng: longitude });
+        });
+    }, []);
     
     const handleKycFileSelect = (type: 'aadhar' | 'personal') => (e: React.ChangeEvent<HTMLInputElement>) => {
         const file = e.target.files?.[0];
@@ -245,6 +257,10 @@ const AddItemScreen: React.FC<{ itemToEdit: Item | null, onBack: () => void }> =
             showToast('Please add at least one work purpose with a valid price.', 'error');
             return;
         }
+        if (!itemGeo) {
+            showToast('Please select a location on the map.', 'error');
+            return;
+        }
         
         const defaultImages = {
             Male: 'https://images.unsplash.com/photo-1591181825852-f4a45a6c3a81?q=80&w=800&auto=format&fit=crop',
@@ -259,6 +275,7 @@ const AddItemScreen: React.FC<{ itemToEdit: Item | null, onBack: () => void }> =
             images: itemImages,
             ownerId: user.id,
             location,
+            locationCoords: itemGeo || undefined,
             description,
             available: itemToEdit ? itemToEdit.available : true,
             status: 'pending' as const,
@@ -284,32 +301,11 @@ const AddItemScreen: React.FC<{ itemToEdit: Item | null, onBack: () => void }> =
     return (
         <div className="dark:text-neutral-200">
             <Header title={itemToEdit ? 'Edit Item' : 'Add Item'} onBack={onBack} />
-            {showKyc && (
-                <div className="p-4 mb-4 border border-primary rounded-lg bg-green-50 dark:bg-green-900/20">
-                    <h3 className="text-lg font-bold text-neutral-800 dark:text-neutral-100 mb-3">Supplier KYC</h3>
-                    <div className="space-y-3">
-                        <div>
-                            <label className="block text-neutral-700 dark:text-neutral-300 text-sm font-bold mb-2">Aadhar Image</label>
-                            {aadharImageUrl && <img src={aadharImageUrl} alt="Aadhar" className="h-24 w-32 object-cover rounded-md mb-2" />}
-                            <input type="file" accept="image/*" onChange={handleKycFileSelect('aadhar')} className="shadow appearance-none border border-neutral-300 dark:border-gray-600 bg-white dark:bg-gray-700 rounded-lg w-full py-2 px-3 text-neutral-800 dark:text-white" />
-                        </div>
-                        <div>
-                            <label className="block text-neutral-700 dark:text-neutral-300 text-sm font-bold mb-2">Personal Photo</label>
-                            {personalPhotoUrl && <img src={personalPhotoUrl} alt="Personal" className="h-24 w-24 object-cover rounded-full mb-2" />}
-                            <input type="file" accept="image/*" onChange={handleKycFileSelect('personal')} className="shadow appearance-none border border-neutral-300 dark:border-gray-600 bg-white dark:bg-gray-700 rounded-lg w-full py-2 px-3 text-neutral-800 dark:text-white" />
-                        </div>
-                        <Input label={"Phone Number"} value={supplierPhone} onChange={e => setSupplierPhone(e.target.value)} />
-                        <Input label={"Email (Optional)"} value={supplierEmail} onChange={e => setSupplierEmail(e.target.value)} />
-                        <div className="flex space-x-2">
-                            <Button onClick={handleKycSave}>Save KYC</Button>
-                        </div>
-                    </div>
-                </div>
-            )}
+            
             <form className="p-4 space-y-4" onSubmit={handleSave}>
                  {category !== ItemCategory.Workers && (
                     <div>
-                        <label className="block text-neutral-700 dark:text-neutral-300 text-sm font-bold mb-2">Item Image</label>
+                        <label className="block text-neutral-700 dark:text-neutral-300 text-sm font-bold mb-2">Item Image <span className="text-red-600">*</span></label>
                         <div className="mt-1 flex justify-center px-6 pt-5 pb-6 border-2 border-gray-300 dark:border-gray-600 border-dashed rounded-md">
                             <div className="space-y-1 text-center">
                                 {imagePreviews.length > 0 ? (
@@ -336,8 +332,56 @@ const AddItemScreen: React.FC<{ itemToEdit: Item | null, onBack: () => void }> =
                         </div>
                     </div>
                  )}
-                <Input label="Item/Service Name" value={name} onChange={e => setName(e.target.value)} required/>
-                <Input label="Location" value={location} onChange={e => setLocation(e.target.value)} required />
+                <Input label="Model Name" value={name} onChange={e => setName(e.target.value)} required/>
+                <div>
+                    <label className="block text-neutral-700 dark:text-neutral-300 text-sm font-bold mb-2">Select Item Location on Map <span className="text-red-600">*</span></label>
+                    <div className="rounded overflow-hidden border border-neutral-200 dark:border-neutral-600">
+                        <MapContainer center={itemMapCenter} zoom={12} scrollWheelZoom={true} style={{ height: '220px', width: '100%' }}
+                            whenCreated={(map) => {
+                                itemMapRef.current = map;
+                                map.on('click', (e: any) => {
+                                    const { lat, lng } = e.latlng;
+                                    setItemGeo({ lat, lng });
+                                    setLocation(`${lat.toFixed(5)}, ${lng.toFixed(5)}`);
+                                });
+                            }}>
+                            <TileLayer attribution='&copy; OpenStreetMap contributors' url="https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png" />
+                            {currentLocation && (
+                                <Marker
+                                    position={[currentLocation.lat, currentLocation.lng]}
+                                    icon={new L.DivIcon({
+                                        html: '<div class="w-4 h-4 rounded-full bg-green-600 ring-2 ring-white"></div>',
+                                        className: '',
+                                        iconSize: [16, 16],
+                                        iconAnchor: [8, 8],
+                                    })}
+                                />
+                            )}
+                            <Marker 
+                                position={itemGeo ? [itemGeo.lat, itemGeo.lng] : itemMapCenter}
+                                icon={L.icon({
+                                    iconUrl: 'https://unpkg.com/leaflet@1.9.4/dist/images/marker-icon.png',
+                                    iconSize: [25, 41],
+                                    iconAnchor: [12, 41],
+                                    popupAnchor: [1, -34],
+                                    shadowUrl: 'https://unpkg.com/leaflet@1.9.4/dist/images/marker-shadow.png',
+                                    shadowSize: [41, 41]
+                                })}
+                                draggable
+                                eventHandlers={{
+                                    dragend: (e: any) => {
+                                        const latlng = e.target.getLatLng();
+                                        setItemGeo({ lat: latlng.lat, lng: latlng.lng });
+                                        setLocation(`${latlng.lat.toFixed(5)}, ${latlng.lng.toFixed(5)}`);
+                                    }
+                                }}
+                            />
+                        </MapContainer>
+                    </div>
+                    <p className="text-xs text-neutral-600 dark:text-neutral-400 mt-1">Tap the map or drag the pin to set location.</p>
+                    <p className="text-xs text-neutral-600 dark:text-neutral-400">This makes the supplier listing location selection intuitive: tap or drag the pin to choose the exact point on the map, and the item save enforces having a selected location</p>
+                    {itemGeo && <p className="text-xs text-neutral-600 dark:text-neutral-400">Selected: {itemGeo.lat.toFixed(5)}, {itemGeo.lng.toFixed(5)}</p>}
+                </div>
                  <div>
                     <label className="block text-neutral-700 dark:text-neutral-300 text-sm font-bold mb-2">Category</label>
                     <select value={category} onChange={e => setCategory(e.target.value as ItemCategory)} className="shadow appearance-none border border-neutral-300 dark:border-gray-600 bg-white dark:bg-gray-700 rounded-lg w-full py-3 px-4 text-neutral-800 dark:text-white leading-tight focus:outline-none focus:ring-2 focus:ring-primary/50">
@@ -563,6 +607,130 @@ const SupplierListingsScreen: React.FC<{ onAddItem: () => void, onEditItem: (m: 
     )
 }
 
+const SupplierKycInlineForm: React.FC<{ onSubmitted: () => void }> = ({ onSubmitted }) => {
+    const { user } = useAuth();
+    const [fullName, setFullName] = useState('');
+    const [phone, setPhone] = useState('');
+    const [location, setLocation] = useState('');
+    const [isSubmitting, setIsSubmitting] = useState(false);
+    const [aadhaarPreview, setAadhaarPreview] = useState<string>('');
+    const [photoPreview, setPhotoPreview] = useState<string>('');
+    const [geo, setGeo] = useState<{ lat: number; lng: number } | null>(null);
+    const [center, setCenter] = useState<[number, number]>([17.3850, 78.4867]);
+    const mapRef = useRef<any>(null);
+
+    useEffect(() => {
+        if (user) {
+            setFullName(user.name || '');
+            setPhone(user.phone || '');
+            setLocation((user as any).location || '');
+        }
+    }, [user]);
+
+    const handleSubmit = async (e: React.FormEvent) => {
+        e.preventDefault();
+        if (!user) return;
+        setIsSubmitting(true);
+        try {
+            const docs = [
+                aadhaarPreview ? { type: 'Aadhaar', url: aadhaarPreview, status: 'Submitted' } : null,
+                photoPreview ? { type: 'Photo', url: photoPreview, status: 'Submitted' } : null,
+            ].filter(Boolean) as any[];
+            await supabase.from('kycSubmissions').upsert([{ userId: user.id, status: 'Pending', submittedAt: new Date().toISOString(), docs, geo }], { onConflict: 'userId' });
+            onSubmitted();
+        } finally {
+            setIsSubmitting(false);
+        }
+    };
+
+    const readFileAsDataUrl = (file: File): Promise<string> => new Promise((resolve, reject) => {
+        const reader = new FileReader();
+        reader.onload = () => resolve(String(reader.result));
+        reader.onerror = reject;
+        reader.readAsDataURL(file);
+    });
+
+    const onAadhaarSelect = async (e: React.ChangeEvent<HTMLInputElement>) => {
+        const file = e.target.files?.[0];
+        if (!file) return;
+        const url = await readFileAsDataUrl(file);
+        setAadhaarPreview(url);
+    };
+    const onPhotoSelect = async (e: React.ChangeEvent<HTMLInputElement>) => {
+        const file = e.target.files?.[0];
+        if (!file) return;
+        const url = await readFileAsDataUrl(file);
+        setPhotoPreview(url);
+    };
+    const itemIcon = L.icon({
+        iconUrl: 'https://unpkg.com/leaflet@1.9.4/dist/images/marker-icon.png',
+        iconSize: [25, 41],
+        iconAnchor: [12, 41],
+        popupAnchor: [1, -34],
+        shadowUrl: 'https://unpkg.com/leaflet@1.9.4/dist/images/marker-shadow.png',
+        shadowSize: [41, 41]
+    });
+
+    useEffect(() => {
+        if (!('geolocation' in navigator)) return;
+        navigator.geolocation.getCurrentPosition(pos => {
+            const { latitude, longitude } = pos.coords;
+            setGeo({ lat: latitude, lng: longitude });
+            setCenter([latitude, longitude]);
+            if (mapRef.current) mapRef.current.setView([latitude, longitude], 14);
+        });
+    }, []);
+
+    const canSubmit = Boolean(aadhaarPreview && photoPreview && geo);
+    return (
+        <form className="space-y-4" onSubmit={handleSubmit}>
+            <Input label="Full Name" value={fullName} onChange={e => setFullName(e.target.value)} required />
+            <Input label="Phone" value={phone} onChange={e => setPhone(e.target.value)} required />
+            <div>
+                <label className="block text-neutral-700 dark:text-neutral-300 text-sm font-bold mb-2">Select Location on Map <span className="text-red-600">*</span></label>
+                <div className="rounded overflow-hidden border border-neutral-200 dark:border-neutral-600">
+                    <MapContainer center={center} zoom={12} scrollWheelZoom={true} style={{ height: '220px', width: '100%' }}
+                        whenCreated={(map) => {
+                            mapRef.current = map;
+                            map.on('click', (e: any) => {
+                                const { lat, lng } = e.latlng;
+                                setGeo({ lat, lng });
+                                setLocation(`${lat.toFixed(5)}, ${lng.toFixed(5)}`);
+                            });
+                        }}>
+                        <TileLayer attribution='&copy; OpenStreetMap contributors' url="https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png" />
+                        <Marker 
+                            position={geo ? [geo.lat, geo.lng] : center} 
+                            icon={itemIcon}
+                            draggable
+                            eventHandlers={{
+                                dragend: (e: any) => {
+                                    const latlng = e.target.getLatLng();
+                                    setGeo({ lat: latlng.lat, lng: latlng.lng });
+                                    setLocation(`${latlng.lat.toFixed(5)}, ${latlng.lng.toFixed(5)}`);
+                                }
+                            }}
+                        />
+                    </MapContainer>
+                </div>
+                <p className="text-xs text-neutral-600 dark:text-neutral-400 mt-1">Drag the pin or tap the map to set location.</p>
+                {geo && <p className="text-xs text-neutral-600 dark:text-neutral-400">Selected: {geo.lat.toFixed(5)}, {geo.lng.toFixed(5)}</p>}
+            </div>
+            <div>
+                <label className="block text-neutral-700 dark:text-neutral-300 text-sm font-bold mb-2">Aadhaar Image <span className="text-red-600">*</span></label>
+                {aadhaarPreview && <img src={aadhaarPreview} alt="Aadhaar" className="h-24 w-32 object-cover rounded-md mb-2" />}
+                <input type="file" accept="image/*" capture="environment" required onChange={onAadhaarSelect} className="shadow appearance-none border border-neutral-300 dark:border-gray-600 bg-white dark:bg-gray-700 rounded-lg w-full py-2 px-3 text-neutral-800 dark:text-white" />
+            </div>
+            <div>
+                <label className="block text-neutral-700 dark:text-neutral-300 text-sm font-bold mb-2">Live Photo <span className="text-red-600">*</span></label>
+                {photoPreview && <img src={photoPreview} alt="Live" className="h-24 w-24 object-cover rounded-full mb-2" />}
+                <input type="file" accept="image/*" capture="user" required onChange={onPhotoSelect} className="shadow appearance-none border border-neutral-300 dark:border-gray-600 bg-white dark:bg-gray-700 rounded-lg w-full py-2 px-3 text-neutral-800 dark:text-white" />
+            </div>
+            
+            <Button type="submit" disabled={isSubmitting || !canSubmit}>{isSubmitting ? 'Processing...' : 'Submit KYC'}</Button>
+        </form>
+    );
+};
 const StatCard: React.FC<{ title: string; value: string | number; icon: React.ReactElement }> = ({ title, value, icon }) => (
     <div className="bg-white dark:bg-neutral-700 p-4 rounded-lg border border-neutral-200 dark:border-neutral-600 flex items-center space-x-3">
         <div className="flex-shrink-0 bg-primary/10 p-3 rounded-full">{icon}</div>
@@ -580,6 +748,7 @@ const SupplierDashboardScreen: React.FC<SupplierViewProps & { goToTab?: (name: s
     const { items } = useItem();
     const { reviews } = useReview();
     const { t } = useLanguage();
+    const [showWeeklyTrend, setShowWeeklyTrend] = useState(false);
 
     const supplierItems = useMemo(() => items.filter(i => i.ownerId === user?.id), [items, user]);
     const supplierItemIds = useMemo(() => supplierItems.map(i => i.id), [supplierItems]);
@@ -748,15 +917,7 @@ const SupplierDashboardScreen: React.FC<SupplierViewProps & { goToTab?: (name: s
                     </div>
                 </div>
                 <div className="mt-4">
-                    <p className="text-sm font-bold text-neutral-800 dark:text-neutral-100 mb-2">Weekly Trend</p>
-                    <div className="space-y-2">
-                        {finance.weeklyTrend.map((d, i) => (
-                            <div key={i} className="flex justify-between text-sm p-2 bg-neutral-50 dark:bg-neutral-800 rounded-md">
-                                <span>{d.date}</span>
-                                <span className="font-bold">₹{d.amount.toLocaleString()}</span>
-                            </div>
-                        ))}
-                    </div>
+                    <button onClick={() => setShowWeeklyTrend(true)} className="w-full text-left text-sm font-bold text-primary">Weekly Trend</button>
                 </div>
                 <div className="mt-4">
                     <p className="text-sm font-bold text-neutral-800 dark:text-neutral-100 mb-2">Top Machines</p>
@@ -779,13 +940,34 @@ const SupplierDashboardScreen: React.FC<SupplierViewProps & { goToTab?: (name: s
                      <h3 className="p-4 text-lg font-bold text-neutral-800 dark:text-neutral-100">{t('profile')}</h3>
                      <ProfileLink label={t('myAccount')} onClick={() => navigate({ view: 'MY_ACCOUNT' })} />
                      <ProfileLink label={t('paymentHistory')} onClick={() => navigate({ view: 'PAYMENT_HISTORY' })} />
-                     <ProfileLink label={t('bookings')} onClick={() => goToTab ? goToTab('bookings') : navigate({ view: 'PAYMENT_HISTORY' })} />
+                     <ProfileLink label={t('bookingHistory')} onClick={() => navigate({ view: 'BOOKING_HISTORY' })} />
                      <ProfileLink label={t('settings')} onClick={() => navigate({ view: 'SETTINGS' })} />
                      <ProfileLink label={t('raiseAComplaint')} onClick={() => navigate({ view: 'SUPPORT' })} />
                      <ProfileLink label={t('privacyPolicy')} onClick={() => navigate({ view: 'POLICY' })} />
                  </div>
                 <Button onClick={logout} variant="secondary">{t('logout')}</Button>
             </div>
+        {showWeeklyTrend && (
+            <div className="fixed inset-0 bg-black/50 z-50 flex items-center justify-center">
+                <div className="bg-white dark:bg-neutral-800 rounded-lg border border-neutral-200 dark:border-neutral-700 w-[90%] max-w-xl p-4">
+                    <div className="flex justify-between items-center mb-2">
+                        <h4 className="font-semibold">Weekly Revenue Trend</h4>
+                        <button onClick={() => setShowWeeklyTrend(false)} className="p-2 rounded hover:bg-neutral-100 dark:hover:bg-neutral-700">✕</button>
+                    </div>
+                    <div style={{ width: '100%', height: 300 }}>
+                        <ResponsiveContainer width="100%" height={300}>
+                            <LineChart data={finance.weeklyTrend}>
+                                <CartesianGrid strokeDasharray="3 3" />
+                                <XAxis dataKey="date" />
+                                <YAxis />
+                                <Tooltip />
+                                <Line type="monotone" dataKey="amount" stroke="#10b981" />
+                            </LineChart>
+                        </ResponsiveContainer>
+                    </div>
+                </div>
+            </div>
+        )}
         </div>
     )
 }
@@ -807,6 +989,25 @@ const SupplierView: React.FC<SupplierViewProps> = ({ navigate }) => {
     const { bookings } = useBooking();
     const { t } = useLanguage();
     const unreadChatCount = user ? getUnreadMessageCount(user.id) : 0;
+    const hasKycLocal = Boolean(user && user.role === 'Supplier' && (user as any).aadharImageUrl && (user as any).personalPhotoUrl && user.phone);
+    const [kycStatus, setKycStatus] = useState<string | null>(null);
+    const [showKycForm, setShowKycForm] = useState(false);
+
+    useEffect(() => {
+        const loadKyc = async () => {
+            if (!user) return;
+            try {
+                const { data } = await supabase.from('kycSubmissions').select('status').eq('userId', user.id).limit(1);
+                const status = (data && data[0] && (data[0] as any).status) || null;
+                setKycStatus(status);
+            } catch {
+                setKycStatus(null);
+            }
+        };
+        loadKyc();
+    }, [user, activeTab]);
+
+    const hasKyc = hasKycLocal || kycStatus === 'Submitted' || kycStatus === 'Approved' || kycStatus === 'Pending';
 
     const hasActiveBookings = useMemo(() => {
         if (!user) return false;
@@ -814,14 +1015,24 @@ const SupplierView: React.FC<SupplierViewProps> = ({ navigate }) => {
     }, [bookings, user]);
 
     const handleAddItem = useCallback(() => {
+        if (!hasKyc) {
+            setActiveTab('listings');
+            setShowKycForm(true);
+            return;
+        }
         setItemToEdit(null);
         setView('ADD_ITEM');
-    }, []);
+    }, [hasKyc]);
 
     const handleEditItem = useCallback((item: Item) => {
+        if (!hasKyc) {
+            setActiveTab('listings');
+            setShowKycForm(true);
+            return;
+        }
         setItemToEdit(item);
         setView('ADD_ITEM');
-    }, []);
+    }, [hasKyc]);
     
     const handleBackToDashboard = useCallback(() => {
         setView('TABS');
@@ -834,7 +1045,22 @@ const SupplierView: React.FC<SupplierViewProps> = ({ navigate }) => {
             case 'requests': return <SupplierRequestsScreen />;
             case 'bookings': return <SupplierBookingsScreen navigate={navigate} />;
             case 'schedule': return <SupplierScheduleScreen />;
-            case 'listings': return <SupplierListingsScreen onAddItem={handleAddItem} onEditItem={handleEditItem} />;
+            case 'listings':
+                if (!hasKyc) {
+                    if (!showKycForm) {
+                        return (
+                            <div className="p-4">
+                                <div className="bg-white dark:bg-neutral-700 p-6 rounded-lg border border-neutral-200 dark:border-neutral-600">
+                                    <h2 className="text-xl font-bold text-neutral-800 dark:text-neutral-100 mb-2">Supplier KYC</h2>
+                                    <p className="text-neutral-700 dark:text-neutral-300 mb-4">Please complete KYC to access Listings.</p>
+                                    <Button onClick={() => setShowKycForm(true)}>Add KYC</Button>
+                                </div>
+                            </div>
+                        );
+                    }
+                    return <SupplierKycInlineForm onSubmitted={() => { setShowKycForm(false); setKycStatus('Submitted'); }} />;
+                }
+                return <SupplierListingsScreen onAddItem={handleAddItem} onEditItem={handleEditItem} />;
             default: return <SupplierDashboardScreen navigate={navigate}/>;
         }
     }

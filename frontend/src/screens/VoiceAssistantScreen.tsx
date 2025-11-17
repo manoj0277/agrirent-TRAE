@@ -1,6 +1,7 @@
 import React, { useState, useRef, useEffect } from 'react';
 import { AppView, ItemCategory, WorkPurpose } from '../types';
 import Header from '../components/Header';
+import Button from '../components/Button';
 import { GoogleGenAI, LiveServerMessage, Modality, Blob, FunctionDeclaration, Type } from '@google/genai';
 import { useToast } from '../context/ToastContext';
 import { WORK_PURPOSES } from '../types';
@@ -99,6 +100,32 @@ const VoiceAssistantScreen: React.FC<VoiceAssistantScreenProps> = ({ navigate, g
     const nextStartTimeRef = useRef(0);
     const sourcesRef = useRef<Set<AudioBufferSourceNode>>(new Set());
     const messagesEndRef = useRef<HTMLDivElement>(null);
+    const [showMicPrompt, setShowMicPrompt] = useState(false);
+    const [showLocationPrompt, setShowLocationPrompt] = useState(false);
+    const pendingLocationFcRef = useRef<any | null>(null);
+    const locationPrefetchedRef = useRef(false);
+
+    useEffect(() => {
+        if (typeof navigator !== 'undefined' && (navigator as any).permissions) {
+            (navigator as any).permissions.query({ name: 'microphone' }).then((status: any) => {
+                if (status.state !== 'granted') setShowMicPrompt(true);
+            }).catch(() => setShowMicPrompt(true));
+        } else {
+            setShowMicPrompt(true);
+        }
+    }, []);
+
+    useEffect(() => {
+        if (!showMicPrompt) {
+            if (typeof navigator !== 'undefined' && (navigator as any).permissions) {
+                (navigator as any).permissions.query({ name: 'geolocation' }).then((status: any) => {
+                    if (status.state !== 'granted' && !locationPrefetchedRef.current) setShowLocationPrompt(true);
+                }).catch(() => { if (!locationPrefetchedRef.current) setShowLocationPrompt(true); });
+            } else {
+                if (!locationPrefetchedRef.current) setShowLocationPrompt(true);
+            }
+        }
+    }, [showMicPrompt]);
 
     const stopSession = () => {
         setStatus('idle');
@@ -117,6 +144,16 @@ const VoiceAssistantScreen: React.FC<VoiceAssistantScreenProps> = ({ navigate, g
     };
     
     const startSession = async () => {
+        if (!ai) {
+            showToast("AI Voice Assistant is not configured.", "error");
+            setStatus('error');
+            return;
+        }
+        if (status !== 'idle' && status !== 'error') return;
+        setShowMicPrompt(true);
+    };
+
+    const startSessionAfterMic = async () => {
         if (!ai) {
             showToast("AI Voice Assistant is not configured.", "error");
             setStatus('error');
@@ -186,16 +223,8 @@ const VoiceAssistantScreen: React.FC<VoiceAssistantScreenProps> = ({ navigate, g
                                     const result = { success: true };
                                     sessionPromiseRef.current?.then((session) => session.sendToolResponse({ functionResponses: { id: fc.id, name: fc.name, response: { result: JSON.stringify(result) } } }));
                                 } else if (fc.name === 'getCurrentLocation') {
-                                     navigator.geolocation.getCurrentPosition(
-                                        (position) => {
-                                            const result = { latitude: position.coords.latitude, longitude: position.coords.longitude };
-                                            sessionPromiseRef.current?.then((session) => session.sendToolResponse({ functionResponses: { id: fc.id, name: fc.name, response: { result: JSON.stringify(result) } } }));
-                                        },
-                                        (error) => {
-                                            const result = { error: error.message };
-                                            sessionPromiseRef.current?.then((session) => session.sendToolResponse({ functionResponses: { id: fc.id, name: fc.name, response: { result: JSON.stringify(result) } } }));
-                                        }
-                                    );
+                                    pendingLocationFcRef.current = fc;
+                                    setShowLocationPrompt(true);
                                 }
                             }
                         }
@@ -242,6 +271,40 @@ const VoiceAssistantScreen: React.FC<VoiceAssistantScreenProps> = ({ navigate, g
             setStatus('error');
             stopSession();
         }
+    };
+
+    const handleAllowLocation = () => {
+        const fc = pendingLocationFcRef.current;
+        navigator.geolocation.getCurrentPosition(
+            (position) => {
+                const result = { latitude: position.coords.latitude, longitude: position.coords.longitude };
+                if (fc) {
+                    sessionPromiseRef.current?.then((session) => session.sendToolResponse({ functionResponses: { id: fc.id, name: fc.name, response: { result: JSON.stringify(result) } } }));
+                    pendingLocationFcRef.current = null;
+                } else {
+                    locationPrefetchedRef.current = true;
+                }
+                setShowLocationPrompt(false);
+            },
+            (error) => {
+                const result = { error: error.message };
+                if (fc) {
+                    sessionPromiseRef.current?.then((session) => session.sendToolResponse({ functionResponses: { id: fc.id, name: fc.name, response: { result: JSON.stringify(result) } } }));
+                    pendingLocationFcRef.current = null;
+                }
+                setShowLocationPrompt(false);
+            }
+        );
+    };
+
+    const handleCancelLocation = () => {
+        const fc = pendingLocationFcRef.current;
+        if (fc) {
+            const result = { error: 'Permission denied' };
+            sessionPromiseRef.current?.then((session) => session.sendToolResponse({ functionResponses: { id: fc.id, name: fc.name, response: { result: JSON.stringify(result) } } }));
+        }
+        setShowLocationPrompt(false);
+        pendingLocationFcRef.current = null;
     };
     
     useEffect(() => {
@@ -304,6 +367,30 @@ const VoiceAssistantScreen: React.FC<VoiceAssistantScreenProps> = ({ navigate, g
                     <p className="text-neutral-600 dark:text-neutral-400 font-semibold">{statusText[status]}</p>
                 </div>
             </div>
+            {showMicPrompt && (
+                <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50">
+                    <div className="bg-white dark:bg-neutral-800 rounded-lg shadow-xl w-11/12 max-w-sm p-6">
+                        <h2 className="text-lg font-bold text-neutral-900 dark:text-neutral-100 mb-2">{t('aiVoiceAssistant')}</h2>
+                        <p className="text-sm text-neutral-700 dark:text-neutral-300 mb-4">Allow microphone access?</p>
+                        <div className="flex space-x-2">
+                            <Button onClick={() => { setShowMicPrompt(false); startSessionAfterMic(); }} className="flex-1">{t('allow')}</Button>
+                            <Button variant="secondary" onClick={() => { setShowMicPrompt(false); }} className="flex-1">{t('cancel')}</Button>
+                        </div>
+                    </div>
+                </div>
+            )}
+            {showLocationPrompt && (
+                <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50">
+                    <div className="bg-white dark:bg-neutral-800 rounded-lg shadow-xl w-11/12 max-w-sm p-6">
+                        <h2 className="text-lg font-bold text-neutral-900 dark:text-neutral-100 mb-2">{t('location')}</h2>
+                        <p className="text-sm text-neutral-700 dark:text-neutral-300 mb-4">Allow location access?</p>
+                        <div className="flex space-x-2">
+                            <Button onClick={handleAllowLocation} className="flex-1">{t('allow')}</Button>
+                            <Button variant="secondary" onClick={handleCancelLocation} className="flex-1">{t('cancel')}</Button>
+                        </div>
+                    </div>
+                </div>
+            )}
         </div>
     );
 };

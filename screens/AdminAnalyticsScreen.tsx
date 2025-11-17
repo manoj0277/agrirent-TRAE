@@ -67,6 +67,34 @@ const AdminAnalyticsScreen: React.FC = () => {
             bookings.forEach(b => { if (b.itemId) counts[b.itemId] = (counts[b.itemId] || 0) + 1; });
             return items.filter(i => (counts[i.id] || 0) === 0).slice(0,10);
         })();
+        const topDemandMachines = (() => {
+            const counts: Record<number, number> = {};
+            bookings.forEach(b => { if (b.itemId) counts[b.itemId] = (counts[b.itemId] || 0) + 1; });
+            return items.map(i => ({ item: i, c: counts[i.id] || 0 })).sort((a,b)=>b.c-a.c).slice(0,10);
+        })();
+        const priceTrends = (() => {
+            const byItem: Record<number, { sum: number; n: number }> = {};
+            completedBookings.forEach(b => { if (b.itemId && b.finalPrice) { const rec = byItem[b.itemId] || { sum: 0, n: 0 }; rec.sum += b.finalPrice; rec.n += 1; byItem[b.itemId] = rec; } });
+            return Object.entries(byItem).map(([id, r]) => ({ id: Number(id), avg: r.sum / r.n })).sort((a,b)=>b.avg-a.avg).slice(0,10);
+        })();
+        const supplyVsDemand = (() => {
+            const byRegion: Record<string, { demand: number; supply: number }> = {};
+            bookings.forEach(b => { const k = b.location || 'Unknown'; byRegion[k] = byRegion[k] || { demand: 0, supply: 0 }; byRegion[k].demand += 1; });
+            items.forEach(i => { const k = i.location || 'Unknown'; byRegion[k] = byRegion[k] || { demand: 0, supply: 0 }; if (i.available && i.status === 'approved') byRegion[k].supply += 1; });
+            return Object.entries(byRegion).map(([region, v]) => ({ region, demand: v.demand, supply: v.supply, gap: v.demand - v.supply })).sort((a,b)=>b.gap-a.gap).slice(0,10);
+        })();
+        const incomeByRegion = (() => {
+            const byRegion: Record<string, number> = {};
+            completedBookings.forEach(b => { const k = b.location || 'Unknown'; byRegion[k] = (byRegion[k] || 0) + (b.finalPrice || 0); });
+            return Object.entries(byRegion).map(([region, total]) => ({ region, total })).sort((a,b)=>b.total-a.total).slice(0,10);
+        })();
+        const seasonalSignals = (() => {
+            const byMonthCat: Record<string, number> = {};
+            bookings.forEach(b => { const m = new Date(b.date || new Date().toISOString()).getMonth()+1; const key = `${m}:${b.itemCategory}`; byMonthCat[key] = (byMonthCat[key] || 0) + 1; });
+            const harvest = [9,10,11].map(m => ({ month: m, tractors: byMonthCat[`${m}:${ItemCategory.Tractors}`] || 0, harvesters: byMonthCat[`${m}:${ItemCategory.Harvesters}`] || 0 }));
+            const rainy = [6,7,8].map(m => ({ month: m, tractors: byMonthCat[`${m}:${ItemCategory.Tractors}`] || 0 }));
+            return { harvest, rainy };
+        })();
         return {
             totalRevenue,
             totalCompletedBookings: completedBookings.length,
@@ -93,7 +121,12 @@ const AdminAnalyticsScreen: React.FC = () => {
             })(),
             shortage,
             highDemandWindows,
-            lowUtilItems
+            lowUtilItems,
+            topDemandMachines,
+            priceTrends,
+            supplyVsDemand,
+            incomeByRegion,
+            seasonalSignals
         };
     }, [bookings, items, allUsers]);
 
@@ -171,6 +204,73 @@ const AdminAnalyticsScreen: React.FC = () => {
                             <ul className="grid grid-cols-1 md:grid-cols-3 gap-2 text-sm">
                                 {analytics.lowUtilItems.map(i => (
                                     <li key={i.id} className="p-2 bg-neutral-50 dark:bg-neutral-600 rounded">{i.name}</li>
+                                ))}
+                            </ul>
+                        </div>
+                    </div>
+                </div>
+
+                <div className="bg-white dark:bg-neutral-700 p-4 rounded-lg border border-neutral-200 dark:border-neutral-600">
+                    <h3 className="font-bold text-neutral-800 dark:text-neutral-100 mb-2">Machine Demand Analytics</h3>
+                    <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                        <div>
+                            <p className="font-semibold mb-2">Top 10 High Demand Machines</p>
+                            <ul className="space-y-1 text-sm">
+                                {analytics.topDemandMachines.map(({ item, c }) => (
+                                    <li key={item.id} className="flex justify-between"><span>{item.name}</span><span className="text-primary">{c}</span></li>
+                                ))}
+                            </ul>
+                        </div>
+                        <div>
+                            <p className="font-semibold mb-2">Price Trends (Avg)</p>
+                            <ul className="space-y-1 text-sm">
+                                {analytics.priceTrends.map(({ id, avg }) => {
+                                    const it = items.find(i => i.id === id)
+                                    return <li key={id} className="flex justify-between"><span>{it?.name || id}</span><span className="text-neutral-700 dark:text-neutral-300">₹{avg.toFixed(0)}</span></li>
+                                })}
+                            </ul>
+                        </div>
+                    </div>
+                </div>
+
+                <div className="bg-white dark:bg-neutral-700 p-4 rounded-lg border border-neutral-200 dark:border-neutral-600">
+                    <h3 className="font-bold text-neutral-800 dark:text-neutral-100 mb-2">Geographical Analytics</h3>
+                    <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                        <div>
+                            <p className="font-semibold mb-2">Supply vs Demand</p>
+                            <ul className="space-y-1 text-sm">
+                                {analytics.supplyVsDemand.map(r => (
+                                    <li key={r.region} className="flex justify-between"><span>{r.region}</span><span className="text-neutral-700 dark:text-neutral-300">D:{r.demand} S:{r.supply} Gap:{r.gap}</span></li>
+                                ))}
+                            </ul>
+                        </div>
+                        <div>
+                            <p className="font-semibold mb-2">Region-based Income</p>
+                            <ul className="space-y-1 text-sm">
+                                {analytics.incomeByRegion.map(r => (
+                                    <li key={r.region} className="flex justify-between"><span>{r.region}</span><span className="text-primary">₹{r.total.toLocaleString()}</span></li>
+                                ))}
+                            </ul>
+                        </div>
+                    </div>
+                </div>
+
+                <div className="bg-white dark:bg-neutral-700 p-4 rounded-lg border border-neutral-200 dark:border-neutral-600">
+                    <h3 className="font-bold text-neutral-800 dark:text-neutral-100 mb-2">Seasonal Analytics</h3>
+                    <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                        <div>
+                            <p className="font-semibold mb-2">Harvest Season Peak (Sep–Nov)</p>
+                            <ul className="space-y-1 text-sm">
+                                {analytics.seasonalSignals.harvest.map(s => (
+                                    <li key={`h-${s.month}`} className="flex justify-between"><span>Month {s.month}</span><span className="text-neutral-700 dark:text-neutral-300">Tractors:{s.tractors} Harvesters:{s.harvesters}</span></li>
+                                ))}
+                            </ul>
+                        </div>
+                        <div>
+                            <p className="font-semibold mb-2">Rainy Season Tractor Demand (Jun–Aug)</p>
+                            <ul className="space-y-1 text-sm">
+                                {analytics.seasonalSignals.rainy.map(s => (
+                                    <li key={`r-${s.month}`} className="flex justify-between"><span>Month {s.month}</span><span className="text-primary">Tractors:{s.tractors}</span></li>
                                 ))}
                             </ul>
                         </div>
